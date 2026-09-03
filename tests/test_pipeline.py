@@ -344,6 +344,69 @@ def test_alert_rendering() -> None:
     print("  ok  embed payload, ordering, fence balance and 10-embed splitting")
 
 
+def test_retry_uses_ticker_first_column_order() -> None:
+    """The single-symbol retry path must request group_by='ticker'.
+
+    yfinance orders columns as (Field, Ticker) unless group_by='ticker' is
+    explicitly passed, even for a single symbol -- _extract only recognises
+    (Ticker, Field). Omitting the kwarg makes every retry silently fail
+    regardless of whether Yahoo actually has the data, which is exactly what
+    shipped and reported SPY as unavailable when it was not. Asserted against
+    the call signature rather than a live network call, so this stays fast and
+    deterministic.
+    """
+    from unittest.mock import patch
+
+    from src.data import _retry_single
+    from src.config import TIMEFRAMES
+
+    captured = {}
+
+    def fake_download(**kwargs):
+        captured.update(kwargs)
+        return pd.DataFrame()   # empty is fine; only the call shape is checked
+
+    with patch("src.data.yf.download", side_effect=fake_download):
+        _retry_single("SPY", TIMEFRAMES["daily"], "2020-01-01")
+
+    assert captured.get("group_by") == "ticker", (
+        "retry omitted group_by='ticker' -- yfinance returns (Field, Ticker) "
+        "column order instead, which _extract cannot parse, so every retry "
+        "would silently fail even when Yahoo has the data"
+    )
+    print("  ok  single-symbol retry requests ticker-first column order")
+
+
+def test_batch_omission_recovers_via_retry() -> None:
+    """A symbol dropped from an otherwise-successful batch response must be
+    recovered by re-requesting it alone, not reported as a problem.
+    """
+    from unittest.mock import patch
+
+    from src.data import fetch
+
+    good = _frame(_random_walk(300, seed=1))
+    good.columns = pd.MultiIndex.from_product([["QQQ"], good.columns])
+
+    calls = []
+
+    def fake_download(tickers, **kwargs):
+        calls.append(tickers)
+        if isinstance(tickers, list):
+            return good                      # SPY silently absent, like Yahoo does
+        spy = _frame(_random_walk(300, seed=2))
+        spy.columns = pd.MultiIndex.from_product([["SPY"], spy.columns])
+        return spy
+
+    with patch("src.data.yf.download", side_effect=fake_download):
+        frames, problems = fetch(["SPY", "QQQ"], "daily", batch_size=25)
+
+    assert len(calls) == 2, f"expected one batch call plus one retry, got {calls}"
+    assert "SPY" in frames, "SPY should have been recovered via the retry path"
+    assert not problems, f"expected no unresolved problems, got {problems}"
+    print("  ok  a batch-omitted symbol is recovered via single-ticker retry")
+
+
 def test_dotenv_never_shadows_a_real_env_var(tmp: Path) -> None:
     """A .env file must lose to an actual environment variable.
 
@@ -423,6 +486,8 @@ def main() -> int:
             test_insufficient_history_is_rejected,
             lambda: test_state_deduplicates(tmp),
             test_alert_rendering,
+            test_retry_uses_ticker_first_column_order,
+            test_batch_omission_recovers_via_retry,
             lambda: test_dotenv_never_shadows_a_real_env_var(tmp),
             test_symbol_normalisation,
         ]

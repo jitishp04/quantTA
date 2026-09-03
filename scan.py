@@ -60,6 +60,8 @@ def scan_timeframe(
     """Run one full timeframe pass. Returns (snapshots, problems)."""
     log.info("[%s] downloading %d tickers", timeframe, len(tickers))
     frames, problems = fetch(tickers, timeframe, batch_size=batch_size)
+    for ticker, reason in problems.items():
+        log.warning("[%s] %s: %s", timeframe, ticker, reason)
 
     snapshots: list[Snapshot] = []
     for ticker, frame in frames.items():

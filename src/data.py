@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import time
 
 import pandas as pd
 import yfinance as yf
@@ -18,6 +19,14 @@ from .config import TIMEFRAMES
 log = logging.getLogger(__name__)
 
 _OHLCV = ["Open", "High", "Low", "Close", "Volume"]
+
+# yfinance's multi-ticker download occasionally omits ONE symbol from an
+# otherwise-successful batch response -- a transient Yahoo hiccup, more
+# frequent from shared cloud IPs (GitHub-hosted runners included) than from a
+# home connection. It is not the ticker's fault and a single re-request almost
+# always succeeds, so this is retried before being reported as a real problem.
+RETRY_ATTEMPTS = 3
+RETRY_BACKOFF_SECONDS = 2.0
 
 
 def _start_date(fetch_years: float) -> str:
@@ -116,6 +125,57 @@ def _extract(raw: pd.DataFrame, ticker: str, single: bool) -> pd.DataFrame | Non
     return frame[_OHLCV].dropna(subset=["Close"])
 
 
+def _apply_completeness(
+    frame: pd.DataFrame,
+    timeframe: str,
+    spec: dict,
+    trim: bool,
+) -> tuple[pd.DataFrame | None, str | None]:
+    """Drop any forming candle and window to spec. Returns (frame, problem)."""
+    if timeframe == "weekly":
+        frame, _ = drop_forming_week(frame)
+    else:
+        frame, _ = drop_forming_day(frame)
+
+    windowed = frame.tail(spec["window"]) if trim else frame
+    if len(windowed) < spec["min_bars"]:
+        return None, (
+            f"insufficient {timeframe} history: {len(windowed)} bars, "
+            f"need {spec['min_bars']}"
+        )
+    return windowed, None
+
+
+def _retry_single(ticker: str, spec: dict, start: str) -> pd.DataFrame | None:
+    """Re-request one symbol on its own after a batch response omitted it."""
+    for attempt in range(RETRY_ATTEMPTS):
+        if attempt:
+            time.sleep(RETRY_BACKOFF_SECONDS * attempt)
+        try:
+            # group_by="ticker" matters even for one symbol: omitted, yfinance
+            # returns (Field, Ticker) column order instead of (Ticker, Field),
+            # which _extract does not recognise -- it would report every
+            # retry as "no data" regardless of what Yahoo actually returned.
+            raw = yf.download(
+                tickers=ticker,
+                start=start,
+                interval=spec["interval"],
+                auto_adjust=True,
+                group_by="ticker",
+                progress=False,
+                actions=False,
+            )
+        except Exception as exc:
+            log.warning("retry %d/%d for %s failed: %s",
+                       attempt + 1, RETRY_ATTEMPTS, ticker, exc)
+            continue
+
+        frame = _extract(raw, ticker, single=True)
+        if frame is not None:
+            return frame
+    return None
+
+
 def fetch(
     tickers: list[str],
     timeframe: str,
@@ -171,29 +231,37 @@ def fetch(
                 problems[ticker] = f"download error: {exc}"
             continue
 
+        missing: list[str] = []
         for ticker in chunk:
             frame = _extract(raw, ticker, single=len(chunk) == 1)
             if frame is None:
-                problems[ticker] = "no data returned (delisted or bad symbol?)"
+                missing.append(ticker)
                 continue
 
             # Discard the in-progress candle BEFORE windowing, so the scan
             # still gets a full count of completed bars. Signals are only ever
             # evaluated on closed candles, so an alert is never retracted.
-            if timeframe == "weekly":
-                frame, _ = drop_forming_week(frame)
+            windowed, problem = _apply_completeness(frame, timeframe, spec, trim)
+            if problem:
+                problems[ticker] = problem
             else:
-                frame, _ = drop_forming_day(frame)
+                frames[ticker] = windowed
 
-            windowed = frame.tail(spec["window"]) if trim else frame
-            if len(windowed) < spec["min_bars"]:
-                problems[ticker] = (
-                    f"insufficient {timeframe} history: {len(windowed)} bars, "
-                    f"need {spec['min_bars']}"
-                )
+        # A symbol absent from an otherwise-successful batch is usually Yahoo
+        # dropping it transiently, not a bad ticker -- worth one more try on
+        # its own before it is reported as a real problem.
+        for ticker in missing:
+            frame = _retry_single(ticker, spec, start)
+            if frame is None:
+                problems[ticker] = "no data returned after retry (delisted or bad symbol?)"
                 continue
 
-            frames[ticker] = windowed
+            windowed, problem = _apply_completeness(frame, timeframe, spec, trim)
+            if problem:
+                problems[ticker] = problem
+            else:
+                frames[ticker] = windowed
+                log.info("%s: recovered on retry after batch omitted it", ticker)
 
     return frames, problems
 
