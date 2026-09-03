@@ -12,6 +12,11 @@ on:
 
 permissions:
   contents: write
+  # Lets this job's GITHUB_TOKEN start scan.yml / study.yml via the REST API
+  # when !scan or !study is posted in the channel (see src/dispatch.py). No
+  # extra secret -- every job already gets a GITHUB_TOKEN, this just grants it
+  # the one additional scope.
+  actions: write
 
 concurrency:
   group: barbell-repo-state
@@ -33,6 +38,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Verify command handling
+        run: python tests/test_discord.py
+
       - name: Poll Discord for watchlist commands
         id: sync
         env:
@@ -40,6 +48,9 @@ jobs:
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
           DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
           DISCORD_USER_ID: ${{ secrets.DISCORD_USER_ID }}
+          # GITHUB_TOKEN is provided by Actions for every run; GITHUB_REPOSITORY
+          # and GITHUB_REF_NAME are already in the job's environment automatically.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set +e
           python sync.py

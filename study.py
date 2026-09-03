@@ -16,6 +16,7 @@ Layer 1 says the signal has an edge worth modelling.
     python study.py --signal capitulation --horizon 126
     python study.py --no-mc                          historical study only
     python study.py --out study.md                   also write a markdown report
+    python study.py --tickers NVDA --discord          also post to Discord
 """
 
 from __future__ import annotations
@@ -26,8 +27,10 @@ import sys
 
 from src import backtest as bt
 from src import montecarlo as mc
+from src.config import load_dotenv
 from src.data import fetch
 from src.indicators import compute
+from src.notify import DiscordClient
 from src.signals import CAPITULATION, EUPHORIA
 from src.watchlist import load_settings, load_tickers, normalise
 
@@ -37,6 +40,8 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 log = logging.getLogger("study")
+
+load_dotenv()   # local convenience; real env vars always take precedence
 
 STUDY_YEARS = 50.0     # "everything Yahoo has"; short listings just return less
 RULE = "=" * 78
@@ -146,6 +151,9 @@ def main() -> int:
     parser.add_argument("--no-backtest", action="store_true")
     parser.add_argument("--no-mc", action="store_true")
     parser.add_argument("--out", help="also write the report to this file")
+    parser.add_argument("--discord", action="store_true",
+                        help="also post the report to Discord (requires "
+                             "DISCORD_WEBHOOK_URL)")
     args = parser.parse_args()
 
     settings = load_settings()
@@ -215,6 +223,17 @@ def main() -> int:
         from pathlib import Path
         Path(args.out).write_text(report + "\n", encoding="utf-8")
         log.info("report written to %s", args.out)
+
+    if args.discord:
+        # A failed post should not turn a successful study into a red X in
+        # Actions -- the job summary and artifact already have the report as
+        # a fallback, so this degrades to a logged warning instead.
+        try:
+            DiscordClient().send_code_block(report)
+            log.info("report posted to Discord")
+        except Exception as exc:
+            log.warning("could not post report to Discord: %s", exc)
+
     return 0
 
 

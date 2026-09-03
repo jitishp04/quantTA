@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Watchlist sync entrypoint.
 
-Polls Discord for pending !add, !remove, !list, !status and !help commands and
-applies them to config/tickers.txt. The workflow commits any resulting change
-back to the repository, so the next scan picks it up automatically.
+Polls Discord for pending !add, !remove, !list, !status, !scan, !study and
+!help commands. Watchlist edits are applied to config/tickers.txt and
+committed by the workflow. !scan and !study instead dispatch scan.yml /
+study.yml as separate Actions runs (see src/dispatch.py) -- this job is a
+30-minute poller, not somewhere to spend several minutes on a Monte Carlo.
 
 Optional layer: a Discord webhook can only send, so this needs a bot token to
 read the channel. Without one the job exits cleanly and you manage tickers by
-editing config/tickers.txt directly.
+editing config/tickers.txt directly (and trigger scans/studies from the
+Actions tab instead of chat).
 
 Exit codes are meaningful to CI:
     0  no watchlist change  (nothing to commit)
@@ -23,6 +26,7 @@ import sys
 
 from src.commands import sync
 from src.config import load_dotenv
+from src.dispatch import GitHubDispatcher
 from src.notify import DiscordClient
 from src.watchlist import load_settings
 
@@ -59,8 +63,15 @@ def main() -> int:
         )
         return EXIT_UNCHANGED
 
+    dispatcher = GitHubDispatcher()
+    if not dispatcher.available:
+        log.info(
+            "no GITHUB_TOKEN/GITHUB_REPOSITORY -- !scan and !study will "
+            "reply that dispatch is unavailable (expected outside Actions)"
+        )
+
     try:
-        changed = sync(client, load_settings(), dry_run=args.dry_run)
+        changed = sync(client, load_settings(), dispatcher, dry_run=args.dry_run)
     except Exception as exc:
         log.error("sync failed: %s", exc)
         return EXIT_ERROR

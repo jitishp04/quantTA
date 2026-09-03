@@ -49,16 +49,21 @@ jobs:
         # The Dickey-Fuller gate is the only thing preventing this report from
         # presenting a random walk as a mean-reverting opportunity. Never
         # publish a study from an unverified build.
-        run: python tests/test_study.py
+        run: |
+          python tests/test_study.py
+          python tests/test_discord.py
 
       - name: Run study
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
           python study.py \
             ${{ inputs.tickers && format('--tickers {0}', inputs.tickers) || '' }} \
             --timeframe "${{ inputs.timeframe }}" \
             --signal "${{ inputs.signal }}" \
             ${{ inputs.horizon && format('--horizon {0}', inputs.horizon) || '' }} \
-            --out study-report.txt
+            --out study-report.txt \
+            --discord
 
       - name: Publish to job summary
         if: always()

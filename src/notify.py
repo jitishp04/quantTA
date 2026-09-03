@@ -60,6 +60,50 @@ def escape(text: str) -> str:
     return _MD_SPECIAL.sub(r"\\\1", text)
 
 
+def chunk_code_block(text: str, limit: int = MAX_CONTENT) -> list[str]:
+    """Split plain text into fenced code blocks, each a valid Discord message.
+
+    Used for the study report, which is column-aligned with spaces and reads
+    as a ragged mess without a monospace fence. A naive fixed-width slice (as
+    `send_text` uses for short replies) would split mid-fence on a long report
+    and leave a dangling ``` that breaks formatting for every line after it,
+    so this splits on line boundaries and keeps each chunk self-fenced.
+    """
+    if not text:
+        return []
+
+    overhead = 8   # opening "```\n" (4) + closing "\n```" (4)
+    budget = max(limit - overhead, 1)
+
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+
+    for line in text.split("\n"):
+        remainder = line
+        # A single line longer than the whole budget is hard-split; none of
+        # this report's lines are anywhere near that wide, but a ticker with
+        # an unusually long note should degrade gracefully, not raise.
+        while len(remainder) > budget:
+            if current:
+                chunks.append("\n".join(current))
+                current, current_len = [], 0
+            chunks.append(remainder[:budget])
+            remainder = remainder[budget:]
+
+        added = len(remainder) + (1 if current else 0)
+        if current and current_len + added > budget:
+            chunks.append("\n".join(current))
+            current, current_len = [], 0
+            added = len(remainder)
+        current.append(remainder)
+        current_len += added
+
+    if current:
+        chunks.append("\n".join(current))
+    return [f"```\n{chunk}\n```" for chunk in chunks]
+
+
 def fmt_price(value: float) -> str:
     """Scale decimal places to magnitude so BTC and penny stocks both read well."""
     magnitude = abs(value)
@@ -149,6 +193,12 @@ class DiscordClient:
         for i in range(0, len(text), MAX_CONTENT):
             self._request("POST", self.webhook_url,
                           json={"content": text[i : i + MAX_CONTENT]})
+
+    def send_code_block(self, text: str) -> None:
+        """Post monospace text (e.g. a study report), fence-balanced per message."""
+        self.require_send()
+        for chunk in chunk_code_block(text):
+            self._request("POST", self.webhook_url, json={"content": chunk})
 
     def read_messages(self, after: str | None = None, limit: int = 100) -> list[dict]:
         """Fetch channel messages, oldest first.

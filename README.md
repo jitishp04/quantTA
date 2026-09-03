@@ -106,6 +106,11 @@ right-click your channel → **Copy Channel ID**.
 | `DISCORD_CHANNEL_ID` | from step 4 |
 | `DISCORD_USER_ID` | *(optional)* restrict commands to your user id |
 
+No extra step needed for `!scan` and `!study` below — they dispatch other
+workflows via the REST API using the `GITHUB_TOKEN` every Actions job already
+gets, gated by `actions: write` in `sync.yml`'s `permissions:` block (already
+set). Nothing to create in GitHub's UI for this part.
+
 ---
 
 ## Managing the watchlist
@@ -118,8 +123,18 @@ and commits the result.
 !remove TSLA                   drop symbols        (aliases !rm !del)
 !list                          show the watchlist  (alias !ls)
 !status                        scanner config
+!scan                          run a scan right now
+!study NVDA [daily|weekly] [capitulation|euphoria|both]
 !help                          command reference
 ```
+
+`!scan` and `!study` don't run inline — the sync job is a 30-minute poller, not
+somewhere to spend several minutes downloading decades of history and running
+a Monte Carlo. They dispatch `scan.yml` / `study.yml` as separate Actions runs,
+and each of *those* workflows posts its own result back to the channel when it
+finishes — typically one to a few minutes later. `!study NVDA` alone defaults
+to daily/both; add a timeframe and/or signal to narrow it, e.g.
+`!study NVDA weekly capitulation`.
 
 Commands use `!`, not `/`. A leading slash is reserved by Discord for
 application commands, which require a public HTTPS endpoint to receive
@@ -237,10 +252,12 @@ python study.py --timeframe weekly --horizon 26
 python study.py --no-mc --out study.txt      # historical evidence only
 ```
 
-Or run it on GitHub: **Actions → Signal Study → Run workflow**. The report
-lands in the job summary and as a downloadable artifact. It is deliberately
-manual — it pulls decades of history per ticker and simulates 20,000 paths,
-and a signal's historical edge does not change week to week.
+Or run it on GitHub: **Actions → Signal Study → Run workflow**, or from the
+Discord channel with `!study NVDA` (needs Stage B — see Setup). The report
+lands in the job summary, as a downloadable artifact, and in the channel if
+triggered from Discord. It is deliberately manual — it pulls decades of
+history per ticker and simulates 20,000 paths, and a signal's historical edge
+does not change week to week.
 
 ### Layer 1 — conditional forward returns (evidence)
 
@@ -350,7 +367,8 @@ src/
   signals.py             capitulation / euphoria evaluation
   state.py               alert de-duplication and cooldown
   notify.py              Discord transport and embed formatting
-  commands.py            !add / !remove / !list command handling
+  commands.py            !add / !remove / !list / !scan / !study handling
+  dispatch.py            triggers scan.yml / study.yml via the Actions API
   backtest.py            Layer 1 - conditional forward returns vs baseline
   montecarlo.py          Layer 2 - OU fit, Dickey-Fuller gate, simulation
 state/
@@ -359,6 +377,7 @@ state/
 tests/
   test_pipeline.py       scanner self-checks, incl. band verification
   test_study.py          study self-checks, incl. DF size and power
+  test_discord.py        command routing, chunking, dispatch self-checks
 ```
 
 ---

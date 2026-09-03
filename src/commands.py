@@ -27,7 +27,15 @@ Supported commands (from the configured channel):
     !remove TSLA            (aliases: !rm, !del)
     !list                   (alias: !ls)
     !status
+    !scan
+    !study NVDA [daily|weekly] [capitulation|euphoria|both]
     !help
+
+`!scan` and `!study` do not run inline -- this job is a scheduled poller, not
+a place to spend several minutes downloading decades of history and running a
+Monte Carlo. They dispatch scan.yml / study.yml as separate Actions runs
+(see dispatch.py) and each of THOSE workflows posts its own result back to
+Discord when it finishes, typically one to a few minutes later.
 """
 
 from __future__ import annotations
@@ -38,6 +46,7 @@ from pathlib import Path
 
 from .config import COMMAND_STATE_FILE
 from .data import is_valid_symbol
+from .dispatch import GitHubDispatcher
 from .notify import DiscordClient, escape
 from .watchlist import load_tickers, normalise, save_tickers
 
@@ -52,9 +61,18 @@ HELP = (
     "!remove TSLA      drop symbols\n"
     "!list             show watchlist\n"
     "!status           scanner config\n"
+    "!scan             run a scan now\n"
+    "!study NVDA       backtest + Monte Carlo\n"
     "!help             this message\n"
     "```\n"
+    "`!study TICKER [daily|weekly] [capitulation|euphoria|both]`\n"
     "Yahoo Finance symbols: `AAPL` `^GSPC` `RELIANCE.NS` `BTC-USD` `BRK-B`"
+)
+
+DISPATCH_UNAVAILABLE = (
+    "⚠ Can't start that from here -- this job's GITHUB_TOKEN doesn't have "
+    "dispatch access. Check `actions: write` is in sync.yml's `permissions:` "
+    "block, or trigger it from the Actions tab instead."
 )
 
 
@@ -160,11 +178,67 @@ def _status(tickers: list[str], settings: dict) -> str:
     return f"**Scanner status**\n```\n{table}\n```"
 
 
-def sync(client: DiscordClient, settings: dict, dry_run: bool = False) -> bool:
+def _scan(dispatcher: GitHubDispatcher) -> str:
+    if not dispatcher.available:
+        return DISPATCH_UNAVAILABLE
+    try:
+        dispatcher.dispatch("scan.yml")
+    except Exception as exc:
+        return f"❌ Couldn't start the scan: {escape(str(exc))}"
+    return "🔄 Scan started -- results post here in a minute or two."
+
+
+_STUDY_TIMEFRAMES = {"daily", "weekly"}
+_STUDY_SIGNALS = {"capitulation", "euphoria", "both"}
+
+
+def _study(args: list[str], dispatcher: GitHubDispatcher) -> str:
+    if not args:
+        return "Usage: `!study NVDA [daily|weekly] [capitulation|euphoria|both]`"
+    if not dispatcher.available:
+        return DISPATCH_UNAVAILABLE
+
+    ticker = normalise(args[0])
+    if not ticker:
+        return f"❌ `{escape(args[0])}` doesn't look like a valid symbol."
+
+    timeframe, signal = "daily", "both"
+    for extra in args[1:]:
+        low = extra.lower()
+        if low in _STUDY_TIMEFRAMES:
+            timeframe = low
+        elif low in _STUDY_SIGNALS:
+            signal = low
+        else:
+            return (f"❌ Didn't recognise `{escape(extra)}`. Expected one of "
+                    f"{sorted(_STUDY_TIMEFRAMES | _STUDY_SIGNALS)}.")
+
+    try:
+        dispatcher.dispatch("study.yml", {
+            "tickers": ticker, "timeframe": timeframe, "signal": signal,
+        })
+    except Exception as exc:
+        return f"❌ Couldn't start the study: {escape(str(exc))}"
+    return (f"🔬 Studying **{ticker}** ({timeframe}, {signal}) -- decades of "
+           f"history plus 20,000 simulated paths. Results post here in a few "
+           f"minutes.")
+
+
+def sync(
+    client: DiscordClient,
+    settings: dict,
+    dispatcher: GitHubDispatcher | None = None,
+    dry_run: bool = False,
+) -> bool:
     """Drain pending Discord commands and apply them to the watchlist.
+
+    `dispatcher` is optional so a caller who only cares about watchlist
+    commands (or is testing) is not forced to construct one. Without it,
+    !scan and !study reply with DISPATCH_UNAVAILABLE rather than raising.
 
     Returns True if the watchlist file was modified.
     """
+    dispatcher = dispatcher or GitHubDispatcher()
     client.require_read()
     cursor = _load_cursor(COMMAND_STATE_FILE)
 
@@ -216,6 +290,10 @@ def sync(client: DiscordClient, settings: dict, dry_run: bool = False) -> bool:
             reply = _list(tickers)
         elif command == f"{PREFIX}status":
             reply = _status(tickers, settings)
+        elif command == f"{PREFIX}scan":
+            reply = _scan(dispatcher)
+        elif command == f"{PREFIX}study":
+            reply = _study(args, dispatcher)
         elif command in (f"{PREFIX}help", f"{PREFIX}start"):
             reply = HELP
         else:
