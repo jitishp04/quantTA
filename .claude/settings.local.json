@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(.\\\\.venv\\\\Scripts\\\\python.exe \"$env:TEMP\\\\claude\\\\C--Users-jitis-Documents-quantTA\\\\2fb106c7-c56c-4986-8043-49e0fd6e7ce3\\\\scratchpad\\\\df_check.py\" 2>&1)",
+      "PowerShell(.\\\\.venv\\\\Scripts\\\\python.exe tests\\\\test_study.py 2>&1 | Select-Object -Last 20)"
+    ]
+  }
+}

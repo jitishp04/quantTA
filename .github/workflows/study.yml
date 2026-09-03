@@ -1,0 +1,78 @@
+name: Signal Study
+
+# On-demand only. This pulls decades of history per ticker and runs 20,000
+# simulated paths, so it is far heavier than the daily scan and there is no
+# reason to run it on a schedule -- the historical edge of a signal does not
+# meaningfully change week to week.
+on:
+  workflow_dispatch:
+    inputs:
+      tickers:
+        description: "Comma-separated tickers (blank = whole watchlist)"
+        type: string
+        default: ""
+      timeframe:
+        description: "Chart environment"
+        type: choice
+        options: [daily, weekly]
+        default: daily
+      signal:
+        description: "Which condition to study"
+        type: choice
+        options: [both, capitulation, euphoria]
+        default: both
+      horizon:
+        description: "Monte Carlo horizon in candles (blank = ~3 months)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  study:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Verify study maths
+        # The Dickey-Fuller gate is the only thing preventing this report from
+        # presenting a random walk as a mean-reverting opportunity. Never
+        # publish a study from an unverified build.
+        run: python tests/test_study.py
+
+      - name: Run study
+        run: |
+          python study.py \
+            ${{ inputs.tickers && format('--tickers {0}', inputs.tickers) || '' }} \
+            --timeframe "${{ inputs.timeframe }}" \
+            --signal "${{ inputs.signal }}" \
+            ${{ inputs.horizon && format('--horizon {0}', inputs.horizon) || '' }} \
+            --out study-report.txt
+
+      - name: Publish to job summary
+        if: always()
+        run: |
+          {
+            echo '## Signal study'
+            echo '```'
+            cat study-report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: study-report
+          path: study-report.txt
+          retention-days: 30

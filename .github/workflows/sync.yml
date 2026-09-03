@@ -1,0 +1,69 @@
+name: Watchlist Sync
+
+on:
+  schedule:
+    # Every 30 minutes. Discord retains channel history indefinitely and the
+    # cursor is a message id, so nothing is lost if this job is down for a day
+    # -- the cadence only governs how quickly !add feels like it responded.
+    # Roughly 12 runner-minutes per day, well inside the free tier (unlimited
+    # for public repos, 2000 min/mo private).
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: barbell-repo-state
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Poll Discord for watchlist commands
+        id: sync
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
+          DISCORD_USER_ID: ${{ secrets.DISCORD_USER_ID }}
+        run: |
+          set +e
+          python sync.py
+          code=$?
+          set -e
+          case "$code" in
+            0) echo "changed=false" >> "$GITHUB_OUTPUT" ;;
+            2) echo "changed=true"  >> "$GITHUB_OUTPUT" ;;
+            *) echo "sync failed with exit $code"; exit "$code" ;;
+          esac
+
+      - name: Commit watchlist and offset
+        run: |
+          git config user.name  "barbell-scanner[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add config/tickers.txt state/
+          if git diff --staged --quiet; then
+            echo "Nothing to commit."
+            exit 0
+          fi
+          if [ "${{ steps.sync.outputs.changed }}" = "true" ]; then
+            git commit -m "chore(watchlist): sync from Discord"
+          else
+            git commit -m "chore(state): advance Discord cursor"
+          fi
+          git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"

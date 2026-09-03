@@ -1,0 +1,28 @@
+# ---------------------------------------------------------------------------
+# Barbell Scanner -- runtime settings (human-managed; the sync job never
+# rewrites this file).
+#
+# NOTE: indicator parameters are deliberately NOT configurable here. The
+# (50 SMA / 200 EMA / 21 RSI / BB 200,2.5) stack is fixed in src/config.py by
+# design -- it is the noise filter, not a tunable.
+# ---------------------------------------------------------------------------
+
+# Which chart environments to scan. Valid: daily, weekly
+timeframes:
+  - daily
+  - weekly
+
+# Re-send a signal that is still active after this many days.
+#   0  -> alert only on the bar where the condition first appears (edge only)
+#   14 -> nudge again every fortnight while price stays outside the band
+cooldown_days: 14
+
+# Push a short "scan clean" message when nothing triggers, so a silent day is
+# distinguishable from a broken workflow. Set false once you trust the cron.
+heartbeat: true
+
+# Report tickers that failed to download / had insufficient history.
+report_problems: true
+
+# Tickers per yfinance batch request. Keep <= 30 to stay clear of throttling.
+batch_size: 25

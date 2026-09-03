@@ -1,0 +1,29 @@
+# Barbell Scanner watchlist. Paste your tickers below, in whatever shape you
+# have them -- one per line, comma separated, or several to a line all work:
+#
+#     AAPL, MSFT, NVDA
+#     GOOGL;AMZN
+#     tsla meta
+#
+# Case does not matter and blank lines are fine. Text after # is a comment.
+# If a line contains anything that is not a valid symbol, the WHOLE line is
+# skipped and logged -- so check the run log after a bulk paste.
+#
+# Symbol format follows Yahoo Finance:
+#   US equity / ETF   AAPL, SPY
+#   Index             ^GSPC, ^NSEI
+#   India (NSE/BSE)   RELIANCE.NS, TCS.NS, 500325.BO
+#   Crypto            BTC-USD, ETH-USD
+#   FX                EURUSD=X
+#   Class shares      BRK-B
+#
+# This file is MACHINE-MANAGED: the Discord sync job rewrites it on !add and
+# !remove, which normalises it (uppercase, deduplicated, sorted) and drops any
+# comments you added below this header.
+
+^GSPC
+BTC-USD
+GLD
+QQQ
+SPY
+TLT

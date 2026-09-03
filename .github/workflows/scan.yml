@@ -1,0 +1,69 @@
+name: Barbell Scan
+
+on:
+  schedule:
+    # 21:30 UTC, Mon-Fri. That is 17:30 ET during EDT and 16:30 ET during EST,
+    # so the run always lands after the US cash close and the daily candle is
+    # settled. GitHub's scheduler can drift 5-20 minutes under load; harmless
+    # here because we only ever read completed bars.
+    - cron: "30 21 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Ignore cooldown state and re-alert every active signal"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+# Shared with the sync workflow: both push to the repo, so they must not
+# interleave. Never cancel in progress -- a killed run would drop alerts.
+concurrency:
+  group: barbell-repo-state
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # pandas_ta 0.4.x declares Requires-Python >=3.12; anything older
+          # fails to resolve at install time.
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Verify indicator math
+        # Cheap insurance against a silent pandas_ta API drift: pandas_ta
+        # swallows unknown keywords, so a bad upgrade would compute the wrong
+        # sigma rather than error. Never alert on unverified bands.
+        run: |
+          python tests/test_pipeline.py
+          python tests/test_study.py
+
+      - name: Run scan
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          python scan.py ${{ inputs.force && '--force' || '' }}
+
+      - name: Commit alert state
+        run: |
+          git config user.name  "barbell-scanner[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state/
+          if git diff --staged --quiet; then
+            echo "No state change."
+            exit 0
+          fi
+          git commit -m "chore(state): alert state $(date -u +%Y-%m-%d)"
+          git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"

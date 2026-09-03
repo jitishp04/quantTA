@@ -1,0 +1,19 @@
+# ---------------------------------------------------------------------------
+# Pinned for reproducible GitHub Actions runs.
+#
+# pandas_ta is pinned exactly. The 0.4.x line changed the Bollinger signature
+# from `std=` to `lower_std=` / `upper_std=`, and unknown keywords are absorbed
+# by **kwargs rather than raising -- so a version drift here does not fail the
+# build, it silently computes the wrong sigma. src/indicators.py asserts the
+# returned column names to catch that, but the pin is the first line of defence.
+#
+# pandas_ta 0.4.71b0 itself requires Python >=3.12, numpy>=2.2.6, pandas>=2.3.2
+# and numba==0.61.2. pandas is held below 3.0 because yfinance's parsing layer
+# is not yet validated against the 3.x breaking changes.
+# ---------------------------------------------------------------------------
+pandas_ta==0.4.71b0
+numpy>=2.2.6,<3.0
+pandas>=2.3.2,<3.0
+yfinance>=0.2.60,<0.3
+PyYAML>=6.0.1
+requests>=2.31
