@@ -1,8 +1,11 @@
 """Watchlist and settings I/O.
 
 The ticker list lives in a plain text file rather than inside settings.yml so
-that the Discord sync job can rewrite it deterministically (sorted, unique,
-uppercase) without destroying hand-written YAML comments.
+that editing it is a one-line diff with no YAML syntax to get wrong, and so a
+list pasted from a broker export or a spreadsheet column just works.
+
+This file is hand-managed: edit config/tickers.txt and commit. Nothing in the
+scanner writes to it.
 """
 
 from __future__ import annotations
@@ -21,31 +24,6 @@ log = logging.getLogger(__name__)
 # plus the separators used by class shares (BRK-B), exchange suffixes
 # (RELIANCE.NS), crypto pairs (BTC-USD) and FX (EURUSD=X).
 _SYMBOL_RE = re.compile(r"^\^?[A-Z0-9][A-Z0-9.\-=]{0,19}$")
-
-_HEADER = """\
-# Barbell Scanner watchlist. Paste your tickers below, in whatever shape you
-# have them -- one per line, comma separated, or several to a line all work:
-#
-#     AAPL, MSFT, NVDA
-#     GOOGL;AMZN
-#     tsla meta
-#
-# Case does not matter and blank lines are fine. Text after # is a comment.
-# If a line contains anything that is not a valid symbol, the WHOLE line is
-# skipped and logged -- so check the run log after a bulk paste.
-#
-# Symbol format follows Yahoo Finance:
-#   US equity / ETF   AAPL, SPY
-#   Index             ^GSPC, ^NSEI
-#   India (NSE/BSE)   RELIANCE.NS, TCS.NS, 500325.BO
-#   Crypto            BTC-USD, ETH-USD
-#   FX                EURUSD=X
-#   Class shares      BRK-B
-#
-# This file is MACHINE-MANAGED: the Discord sync job rewrites it on !add and
-# !remove, which normalises it (uppercase, deduplicated, sorted) and drops any
-# comments you added below this header.
-"""
 
 DEFAULT_SETTINGS: dict = {
     "timeframes": ["daily", "weekly"],
@@ -111,13 +89,6 @@ def load_tickers(path: Path = TICKERS_FILE) -> list[str]:
                 out.append(symbol)
 
     return out
-
-
-def save_tickers(tickers: list[str], path: Path = TICKERS_FILE) -> None:
-    """Rewrite the watchlist in canonical form (unique, sorted, uppercase)."""
-    body = "\n".join(sorted(set(tickers)))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"{_HEADER}\n{body}\n", encoding="utf-8")
 
 
 def load_settings(path: Path = SETTINGS_FILE) -> dict:

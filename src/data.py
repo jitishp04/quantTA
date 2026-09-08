@@ -264,12 +264,3 @@ def fetch(
                 log.info("%s: recovered on retry after batch omitted it", ticker)
 
     return frames, problems
-
-
-def is_valid_symbol(ticker: str) -> bool:
-    """Cheap existence probe used by the Discord !add handler."""
-    try:
-        probe = yf.Ticker(ticker).history(period="1mo", auto_adjust=True)
-        return not probe.empty
-    except Exception:
-        return False

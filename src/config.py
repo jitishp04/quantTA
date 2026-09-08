@@ -23,7 +23,6 @@ STATE_DIR = ROOT / "state"
 TICKERS_FILE = CONFIG_DIR / "tickers.txt"
 SETTINGS_FILE = CONFIG_DIR / "settings.yml"
 ALERT_STATE_FILE = STATE_DIR / "alerts.json"
-COMMAND_STATE_FILE = STATE_DIR / "discord.json"
 
 # --------------------------------------------------------------------------
 # Indicator lengths -- identical across both chart environments

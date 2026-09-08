@@ -1,13 +1,10 @@
 """Discord transport and alert formatting.
 
-Two independent capabilities, deliberately decoupled so the easy half works
-without the hard half:
-
-  Sending    a webhook URL. One secret, no bot, no server. This is all the
-             scanner needs to alert you.
-  Receiving  a bot token plus a channel id, polled over the REST API. Only
-             required for /add and /remove; the scanner is fully functional
-             without it.
+Send-only, by design. A webhook URL is one secret, needs no bot application,
+no privileged intents and no server to receive anything -- and a scheduled
+scanner never has to read the channel, only post to it. Managing the watchlist
+is a commit to config/tickers.txt rather than a chat command, which is what
+lets the whole system be a single cron job.
 
 Alerts are rendered as embeds rather than plain messages: a coloured left rail
 makes capitulation and euphoria distinguishable at a glance on a phone, and the
@@ -31,7 +28,6 @@ from .signals import CAPITULATION, EUPHORIA, Snapshot
 
 log = logging.getLogger(__name__)
 
-API_ROOT = "https://discord.com/api/v10"
 TIMEOUT = 30
 
 MAX_CONTENT = 2000
@@ -64,10 +60,10 @@ def chunk_code_block(text: str, limit: int = MAX_CONTENT) -> list[str]:
     """Split plain text into fenced code blocks, each a valid Discord message.
 
     Used for the study report, which is column-aligned with spaces and reads
-    as a ragged mess without a monospace fence. A naive fixed-width slice (as
-    `send_text` uses for short replies) would split mid-fence on a long report
-    and leave a dangling ``` that breaks formatting for every line after it,
-    so this splits on line boundaries and keeps each chunk self-fenced.
+    as a ragged mess without a monospace fence. A naive fixed-width slice
+    would split mid-fence on a long report and leave a dangling ``` that
+    breaks formatting for every line after it, so this splits on line
+    boundaries and keeps each chunk self-fenced.
     """
     if not text:
         return []
@@ -117,45 +113,22 @@ def fmt_price(value: float) -> str:
 
 
 class DiscordClient:
-    """Webhook sender with optional bot-token reading."""
+    """Webhook sender."""
 
-    def __init__(
-        self,
-        webhook_url: str | None = None,
-        bot_token: str | None = None,
-        channel_id: str | None = None,
-        user_id: str | None = None,
-    ):
+    def __init__(self, webhook_url: str | None = None):
         self.webhook_url = webhook_url or os.environ.get("DISCORD_WEBHOOK_URL", "")
-        self.bot_token = bot_token or os.environ.get("DISCORD_BOT_TOKEN", "")
-        self.channel_id = channel_id or os.environ.get("DISCORD_CHANNEL_ID", "")
-        # Optional: restrict commands to one author. Unset means anyone who can
-        # post in the channel can manage the watchlist, which is usually what
-        # you want for a private server.
-        self.user_id = user_id or os.environ.get("DISCORD_USER_ID", "")
         self.session = requests.Session()
 
-    # -- capability probes ------------------------------------------------
+    # -- capability probe -------------------------------------------------
 
     @property
     def can_send(self) -> bool:
         return bool(self.webhook_url)
 
-    @property
-    def can_read(self) -> bool:
-        return bool(self.bot_token and self.channel_id)
-
     def require_send(self) -> None:
         if not self.can_send:
             raise RuntimeError(
                 "DISCORD_WEBHOOK_URL must be set (GitHub Actions secret, or .env)"
-            )
-
-    def require_read(self) -> None:
-        if not self.can_read:
-            raise RuntimeError(
-                "DISCORD_BOT_TOKEN and DISCORD_CHANNEL_ID must be set to read "
-                "commands. Alerts work without them -- see the README."
             )
 
     # -- transport --------------------------------------------------------
@@ -187,38 +160,11 @@ class DiscordClient:
         for chunk in _split_payload(payload):
             self._request("POST", self.webhook_url, json=chunk)
 
-    def send_text(self, text: str) -> None:
-        """Post a plain message, wrapping over 2000 characters."""
-        self.require_send()
-        for i in range(0, len(text), MAX_CONTENT):
-            self._request("POST", self.webhook_url,
-                          json={"content": text[i : i + MAX_CONTENT]})
-
     def send_code_block(self, text: str) -> None:
         """Post monospace text (e.g. a study report), fence-balanced per message."""
         self.require_send()
         for chunk in chunk_code_block(text):
             self._request("POST", self.webhook_url, json={"content": chunk})
-
-    def read_messages(self, after: str | None = None, limit: int = 100) -> list[dict]:
-        """Fetch channel messages, oldest first.
-
-        Requires the MESSAGE CONTENT INTENT to be enabled for the application,
-        otherwise `content` comes back empty for every message and commands
-        appear to be silently ignored.
-        """
-        self.require_read()
-        params: dict = {"limit": min(limit, 100)}
-        if after:
-            params["after"] = after
-        result = self._request(
-            "GET",
-            f"{API_ROOT}/channels/{self.channel_id}/messages",
-            headers={"Authorization": f"Bot {self.bot_token}"},
-            params=params,
-        )
-        messages = result if isinstance(result, list) else []
-        return list(reversed(messages))     # API returns newest-first
 
 
 def _embed_size(embed: dict) -> int:

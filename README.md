@@ -4,8 +4,8 @@ A zero-cost, serverless scanner that watches your universe for **statistical
 extremes confirmed by momentum**, and pushes them to Discord. It runs on
 GitHub Actions cron — no server, no paid data feed, no API bill.
 
-Optionally, you manage the watchlist from the channel: `!add NVDA` and the next
-scan includes it.
+The alert lands premarket, so the previous session's signals are waiting before
+the day opens.
 
 ---
 
@@ -44,11 +44,9 @@ Anything with less history is skipped and reported, never silently dropped.
 
 ## Setup
 
-Setup is in two stages. **Stage A alone gets you a fully working scanner** —
-one secret, about two minutes. Stage B is optional and only adds the ability
-to manage tickers from the channel.
-
-### Stage A — alerts (required)
+One secret, about two minutes. There is no bot application to create, no
+privileged intent to enable and nothing to host — a webhook only ever needs to
+*send*, and a scheduled scanner never reads the channel.
 
 **1. Create a webhook.** In Discord: your channel → **Edit Channel →
 Integrations → Webhooks → New Webhook** → **Copy Webhook URL**. That single URL
@@ -79,85 +77,35 @@ alert state back to the repo; without this they run fine and then fail on push.
 **5. Smoke test.** **Actions → Barbell Scan → Run workflow**. A Discord message
 should land within a minute or two.
 
-### Stage B — watchlist commands (optional)
-
-A webhook can only *send*. Reading `!add` needs a bot, which is why this is
-separate — skip it entirely and just edit `config/tickers.txt` by hand.
-
-**1.** At [discord.com/developers](https://discord.com/developers/applications)
-→ **New Application** → **Bot** → **Reset Token** → copy it.
-
-**2.** Same page → **Privileged Gateway Intents** → enable **MESSAGE CONTENT
-INTENT**. ⚠️ Without this the API returns your messages with an *empty*
-`content` field, so commands are silently ignored with no error anywhere. The
-sync job detects this specific case and logs a pointed warning.
-
-**3.** **OAuth2 → URL Generator** → scope `bot`, permissions *View Channels* +
-*Read Message History* → open the generated URL → invite it to your server.
-
-**4.** In Discord enable **Settings → Advanced → Developer Mode**, then
-right-click your channel → **Copy Channel ID**.
-
-**5.** Add the extra secrets:
-
-| Name | Value |
-|---|---|
-| `DISCORD_BOT_TOKEN` | from step 1 |
-| `DISCORD_CHANNEL_ID` | from step 4 |
-| `DISCORD_USER_ID` | *(optional)* restrict commands to your user id |
-
-No extra step needed for `!scan` and `!study` below — they dispatch other
-workflows via the REST API using the `GITHUB_TOKEN` every Actions job already
-gets, gated by `actions: write` in `sync.yml`'s `permissions:` block (already
-set). Nothing to create in GitHub's UI for this part.
-
 ---
 
 ## Managing the watchlist
 
-Post in the channel. The sync job runs every 30 minutes, applies your commands
-and commits the result.
+Edit `config/tickers.txt` and commit — from the GitHub web UI on a phone, or
+locally. The next scheduled scan picks it up; nothing else has to happen, and
+nothing in the scanner writes to that file.
 
-```
-!add NVDA GOOGL RELIANCE.NS    add symbols (validated against Yahoo first)
-!remove TSLA                   drop symbols        (aliases !rm !del)
-!list                          show the watchlist  (alias !ls)
-!status                        scanner config
-!scan                          run a scan right now
-!study NVDA [daily|weekly] [capitulation|euphoria|both]
-!help                          command reference
-```
-
-`!scan` and `!study` don't run inline — the sync job is a 30-minute poller, not
-somewhere to spend several minutes downloading decades of history and running
-a Monte Carlo. They dispatch `scan.yml` / `study.yml` as separate Actions runs,
-and each of *those* workflows posts its own result back to the channel when it
-finishes — typically one to a few minutes later. `!study NVDA` alone defaults
-to daily/both; add a timeframe and/or signal to narrow it, e.g.
-`!study NVDA weekly capitulation`.
-
-Commands use `!`, not `/`. A leading slash is reserved by Discord for
-application commands, which require a public HTTPS endpoint to receive
-interactions and so cannot work from a cron job.
+Paste a list in whatever shape you have it: one per line, comma separated, or
+several to a line all work. Case does not matter, blank lines are fine, and
+text after `#` is a comment. If a line contains anything that is not a valid
+symbol the **whole line** is skipped and logged — so check the run log after a
+bulk paste. A typo that quietly drops a position from the scan is far more
+expensive than a noisy log line.
 
 Symbols follow Yahoo Finance: `AAPL` · `^GSPC` · `RELIANCE.NS` · `BTC-USD` ·
-`EURUSD=X` · `BRK-B`. An unknown symbol is rejected with a reason rather than
-silently added and then failing on every future scan.
+`EURUSD=X` · `BRK-B`.
 
-You can also just edit `config/tickers.txt` directly — paste a list in whatever
-shape you have it (one per line, comma separated, or several to a line all
-work). The sync job normalises it on its next pass. If a line contains anything
-that is not a valid symbol the whole line is skipped and logged, so check the
-run log after a bulk paste.
+### Running something on demand
 
-**Latency note:** Discord retains channel history indefinitely and the cursor
-is a message id, so nothing is lost if the sync job is down for a day. The
-cadence only governs how responsive `!add` feels. GitHub's scheduler can drift
-5–20 minutes under load; for an instant apply, trigger **Actions → Watchlist
-Sync → Run workflow**.
+Both workflows have a manual trigger, so you never have to wait for the cron:
 
-On its **first** run the sync job records the newest message id without acting
-on it, so an existing channel's backlog is never replayed as commands.
+| Want | Do |
+|---|---|
+| A scan right now | **Actions → Barbell Scan → Run workflow**, with an optional `force` toggle that ignores the cooldown |
+| A study of one ticker | **Actions → Signal Study → Run workflow**, then fill in tickers / timeframe / signal / horizon |
+
+Both post their results to the same Discord channel when they finish. The
+Actions tab works fine in a phone browser.
 
 ---
 
@@ -165,18 +113,31 @@ on it, so an existing channel's backlog is never replayed as commands.
 
 | Workflow | Cron (UTC) | Purpose |
 |---|---|---|
-| `scan.yml` | `30 21 * * 1-5` | Post-close scan → Discord alert |
-| `sync.yml` | `*/30 * * * *` | Apply watchlist commands |
+| `scan.yml` | `0 8 * * 1-5` | Premarket scan → Discord alert |
 | `study.yml` | manual only | Backtest + Monte Carlo report |
 
-21:30 UTC is 17:30 ET under EDT and 16:30 ET under EST, so the run always lands
-after the US cash close with the daily candle settled.
+08:00 UTC is 04:00 ET under EDT — exactly when the US premarket session opens —
+and 03:00 ET under EST. Cron is UTC-only and does not follow DST, so the
+earlier of the two is used: the alert is occasionally an hour early, never
+late.
 
-`scan.yml` and `sync.yml` share a `concurrency` group because both push to the
-repo, and neither cancels in progress — a cancelled scan would drop alerts.
+The candle being read is the **previous** session's, settled for hours. Each
+weekday covers the prior close and Monday covers Friday's, so all five sessions
+are still scanned — just reported the morning after, when the signal is
+actionable, rather than on the evening of the close that produced it.
 
-Cost: roughly 15 runner-minutes a day. Unlimited free on public repos, and
-inside the 2,000 min/month free tier on private ones.
+⚠️ Do not move this past ~13:00 UTC. Once the US session opens Yahoo stamps a
+still-forming bar for the day in progress, and that bar is discarded
+automatically only for weekend-trading instruments (see below) — an equity
+would be evaluated on a partial candle. GitHub's scheduler also drifts 5–20
+minutes under load, so leave the margin.
+
+`scan.yml` pushes alert state back to the repo, so it uses a `concurrency`
+group to stop a manual dispatch interleaving with the scheduled run, and never
+cancels in progress — a cancelled scan would record alerts it never delivered.
+
+Cost: a couple of runner-minutes a day. Unlimited free on public repos, and
+well inside the 2,000 min/month free tier on private ones.
 
 ### How the data is fetched
 
@@ -201,14 +162,15 @@ discarded before the indicators are computed:
 | | Rule | Effect |
 |---|---|---|
 | **Weekly** | Bar dropped until `today >= week_start + 7d` | Signals confirm on Monday's run, on a fully closed week |
-| **Daily, exchange-traded** | Kept — the session closed before the scan | Confirms same day |
+| **Daily, exchange-traded** | Kept — at 08:00 UTC the newest bar is the previous session's | Confirms the morning after the close |
 | **Daily, 24/7 (crypto, some FX)** | Bar dated today dropped | Confirms next run, on the closed UTC day |
 
 This matters more than it looks. yfinance stamps a weekly bar with the Monday
 that starts it and keeps mutating it all week — mid-week its close is just the
 latest daily close. Read on a Wednesday, a "weekly" signal is computed from a
 two-day stub and can vanish by Friday. Likewise a crypto daily candle rolls at
-00:00 UTC, hours after the 21:30 UTC scan.
+00:00 UTC, so when the scan runs at 08:00 UTC the bar dated today is only eight
+hours old and still forming.
 
 Whether an instrument trades weekends is detected from its own price index, not
 guessed from the symbol suffix, so a `-USD` naming convention is never relied
@@ -252,10 +214,9 @@ python study.py --timeframe weekly --horizon 26
 python study.py --no-mc --out study.txt      # historical evidence only
 ```
 
-Or run it on GitHub: **Actions → Signal Study → Run workflow**, or from the
-Discord channel with `!study NVDA` (needs Stage B — see Setup). The report
-lands in the job summary, as a downloadable artifact, and in the channel if
-triggered from Discord. It is deliberately manual — it pulls decades of
+Or run it on GitHub: **Actions → Signal Study → Run workflow**. The report
+lands in the job summary, as a downloadable artifact, and in the Discord
+channel. It is deliberately manual — it pulls decades of
 history per ticker and simulates 20,000 paths, and a signal's historical edge
 does not change week to week.
 
@@ -355,10 +316,9 @@ repeatedly. Discord credentials are only needed for a real send — put them in
 
 ```
 scan.py                  scan entrypoint
-sync.py                  watchlist sync entrypoint
 study.py                 backtest + Monte Carlo report
 config/
-  tickers.txt            watchlist (machine-managed by the sync job)
+  tickers.txt            watchlist (hand-edited)
   settings.yml           cadence, cooldown, heartbeat (human-managed)
 src/
   config.py              FIXED indicator parameters and lookback windows
@@ -366,18 +326,15 @@ src/
   indicators.py          vectorised SMA/EMA/RSI/BB computation
   signals.py             capitulation / euphoria evaluation
   state.py               alert de-duplication and cooldown
-  notify.py              Discord transport and embed formatting
-  commands.py            !add / !remove / !list / !scan / !study handling
-  dispatch.py            triggers scan.yml / study.yml via the Actions API
+  notify.py              Discord webhook transport and embed formatting
   backtest.py            Layer 1 - conditional forward returns vs baseline
   montecarlo.py          Layer 2 - OU fit, Dickey-Fuller gate, simulation
 state/
   alerts.json            last alert per ticker+timeframe
-  discord.json           message cursor (prevents replaying commands)
 tests/
   test_pipeline.py       scanner self-checks, incl. band verification
   test_study.py          study self-checks, incl. DF size and power
-  test_discord.py        command routing, chunking, dispatch self-checks
+  test_discord.py        message chunking / fence-balance self-checks
 ```
 
 ---

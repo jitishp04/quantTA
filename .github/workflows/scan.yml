@@ -2,11 +2,23 @@ name: Barbell Scan
 
 on:
   schedule:
-    # 21:30 UTC, Mon-Fri. That is 17:30 ET during EDT and 16:30 ET during EST,
-    # so the run always lands after the US cash close and the daily candle is
-    # settled. GitHub's scheduler can drift 5-20 minutes under load; harmless
-    # here because we only ever read completed bars.
-    - cron: "30 21 * * 1-5"
+    # 08:00 UTC, Mon-Fri -- premarket, so the alert is already waiting before
+    # the trading day starts. That is 04:00 ET under EDT (exactly when the
+    # premarket session opens) and 03:00 ET under EST. Cron is UTC-only and
+    # does not shift with DST, so the earlier of the two is chosen: the alert
+    # is occasionally an hour early, never late.
+    #
+    # The candle being read is the PREVIOUS session's, settled for hours. Each
+    # weekday covers the prior close and Monday covers Friday's, so all five
+    # sessions are still scanned -- just reported the next morning, when the
+    # signal is actionable, rather than after the close that produced it.
+    #
+    # Do NOT push this past ~13:00 UTC. Once the US session opens Yahoo stamps
+    # a still-forming bar for the current day, and drop_forming_day() discards
+    # that only for weekend-trading instruments (crypto); an equity would be
+    # evaluated on a partial candle. GitHub's scheduler also drifts 5-20
+    # minutes under load, so leave the margin.
+    - cron: "0 8 * * 1-5"
   workflow_dispatch:
     inputs:
       force:
@@ -17,8 +29,9 @@ on:
 permissions:
   contents: write
 
-# Shared with the sync workflow: both push to the repo, so they must not
-# interleave. Never cancel in progress -- a killed run would drop alerts.
+# This job pushes alert state back to the repo, so a manual dispatch must not
+# interleave with the scheduled run. Never cancel in progress -- a killed run
+# would record alerts in state/ that were never actually delivered.
 concurrency:
   group: barbell-repo-state
   cancel-in-progress: false
