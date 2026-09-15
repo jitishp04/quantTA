@@ -20,9 +20,27 @@
 # Edit this file directly and commit -- nothing in the scanner writes to it,
 # so any layout and any comments you add below are preserved.
 
-^GSPC
-BTC-USD
-GLD
 QQQ
 SPY
-TLT
+
+# Holdings from the 2026-09-15 broker export (positioner.csv), stocks only --
+# the 8 ETFs and 1 fund in that export are deliberately left out.
+# Nokia is held as the Stockholm listing (XSTO, SEK), not the US ADR (NOK).
+AMZN
+BE
+GRAB
+HOOD
+META
+NBIS
+NOKIA-SEK.ST
+NVDA
+PLTR
+PURR
+QBTS
+RKLB
+SOFI
+TSLA
+TTWO
+UBER
+VST
+ZETA
